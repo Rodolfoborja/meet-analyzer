@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Authentication (NextAuth.js)
+// ============================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================
+// Core Models
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  // API Keys (encrypted)
+  openaiApiKey    String? @db.Text
+  anthropicApiKey String? @db.Text
+  geminiApiKey    String? @db.Text
+
+  // Preferences
+  defaultLlmProvider LlmProvider @default(OPENAI)
+  emailNotifications Boolean     @default(true)
+  timezone           String      @default("America/Guayaquil")
+
+  // Relations
+  accounts Account[]
+  sessions Session[]
+  meetings Meeting[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Meeting {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Meeting Info
+  title       String
+  description String?
+  platform    MeetingPlatform @default(UPLOAD)
+  meetingUrl  String?
+  scheduledAt DateTime?
+  duration    Int? // minutes
+
+  // Status
+  status MeetingStatus @default(PENDING)
+
+  // Audio
+  audioUrl     String? @db.Text
+  audioFormat  String?
+  audioDuration Float? // seconds
+
+  // Relations
+  transcript   Transcript?
+  analysis     Analysis?
+  participants Participant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Transcript {
+  id        String  @id @default(cuid())
+  meetingId String  @unique
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  // Transcription data
+  content   Json // Array of {timestamp: number, speaker: string, text: string}
+  rawText   String @db.Text // Plain text version
+  wordCount Int
+
+  // Metadata
+  language        String  @default("es")
+  confidence      Float?
+  transcriptionId String? // External service ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Analysis {
+  id        String  @id @default(cuid())
+  meetingId String  @unique
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  // LLM Used
+  llmProvider LlmProvider
+  model       String
+
+  // Analysis Results
+  summary     String  @db.Text
+  keyPoints   Json // Array of strings
+  actionItems Json // Array of {task: string, assignee?: string, deadline?: string}
+  decisions   Json // Array of strings
+  followUps   Json // Array of strings
+
+  // Oratory Metrics
+  oratoryMetrics Json? // {speakingPace: number, fillerWords: {...}, interruptions: number}
+
+  // Raw LLM response for debugging
+  rawResponse Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Participant {
+  id        String  @id @default(cuid())
+  meetingId String
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  // Identity
+  speakerLabel String // "Speaker 1", "Speaker A", etc.
+  name         String? // User-assigned name
+  email        String?
+
+  // Metrics
+  speakingTime Int   @default(0) // seconds
+  wordCount    Int   @default(0)
+  turnCount    Int   @default(0) // number of times they spoke
+
+  // Oratory Analysis
+  wordsPerMinute Float?
+  fillerWords    Json? // {word: count}
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([meetingId, speakerLabel])
+  @@index([meetingId])
+}
+
+// ============================================
+// Job Queue (for tracking async operations)
+// ============================================
+
+model Job {
+  id        String    @id @default(cuid())
+  meetingId String
+  type      JobType
+  status    JobStatus @default(PENDING)
+  
+  // Progress tracking
+  progress  Int       @default(0) // 0-100
+  message   String?
+  
+  // Error handling
+  error     String?   @db.Text
+  attempts  Int       @default(0)
+  
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([meetingId])
+  @@index([status])
+}
+
+// ============================================
+// Enums
+// ============================================
+
+enum MeetingPlatform {
+  GOOGLE_MEET
+  MICROSOFT_TEAMS
+  ZOOM
+  UPLOAD
+}
+
+enum MeetingStatus {
+  PENDING      // Waiting to be processed
+  UPLOADING    // Audio being uploaded
+  TRANSCRIBING // Audio being transcribed
+  ANALYZING    // Being analyzed by LLM
+  COMPLETED    // All done
+  ERROR        // Something failed
+}
+
+enum LlmProvider {
+  OPENAI
+  ANTHROPIC
+  GEMINI
+}
+
+enum JobType {
+  TRANSCRIPTION
+  ANALYSIS
+  EMAIL_REPORT
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
