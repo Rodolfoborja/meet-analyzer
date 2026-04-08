@@ -1,4 +1,4 @@
-# Build stage
+# Frontend Dockerfile
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -9,6 +9,10 @@ RUN npm ci
 
 # Copy source and build
 COPY . .
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN npm run build
 
 # Production stage
@@ -18,19 +22,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Create non-root user
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy built application
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-
-# Set permissions
-RUN chown -R nextjs:nodejs /app
 
 USER nextjs
 
